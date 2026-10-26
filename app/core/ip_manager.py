@@ -10,7 +10,7 @@ import os
 import time
 import uuid
 
-from .ip_utils import valid_ipv4
+from .ip_utils import valid_ipv4, effective_dns, mask_to_prefix  # noqa: F401
 
 
 class ApplyError(Exception):
@@ -21,24 +21,28 @@ def _quote(name):
     return '"' + (name or "").replace('"', '') + '"'
 
 
-def build_netsh_commands(name, prof):
-    """Build netsh command list from a profile dict"""
+def build_netsh_commands(name, prof, settings=None):
+    """Build netsh command list from a profile dict (+ global DNS settings).
+
+    Address follows the profile (DHCP or static); DNS follows dns_mode:
+    custom values, global DNS, or DHCP-provided.
+    """
     q = _quote(name)
     cmds = []
     if prof.get("dhcp"):
         cmds.append(f'netsh interface ip set address name={q} source=dhcp')
-        cmds.append(f'netsh interface ip set dnsservers name={q} source=dhcp')
-        return cmds
-    ip, mask = prof.get("ip", ""), prof.get("mask", "")
-    if not valid_ipv4(ip) or not valid_ipv4(mask):
-        raise ApplyError("IP 或子网掩码格式无效")
-    addr = f'netsh interface ip set address name={q} source=static addr={ip} mask={mask}'
-    if prof.get("gateway"):
-        if not valid_ipv4(prof["gateway"]):
-            raise ApplyError("网关格式无效")
-        addr += f' gateway={prof["gateway"]}'
-    cmds.append(addr)
-    dns1, dns2 = prof.get("dns1", ""), prof.get("dns2", "")
+    else:
+        ip, mask = prof.get("ip", ""), prof.get("mask", "")
+        if not valid_ipv4(ip) or not valid_ipv4(mask):
+            raise ApplyError("IP 或子网掩码格式无效")
+        addr = f'netsh interface ip set address name={q} source=static addr={ip} mask={mask}'
+        if prof.get("gateway"):
+            if not valid_ipv4(prof["gateway"]):
+                raise ApplyError("网关格式无效")
+            addr += f' gateway={prof["gateway"]}'
+        cmds.append(addr)
+
+    dns1, dns2 = effective_dns(prof, settings)
     if dns1:
         if not valid_ipv4(dns1):
             raise ApplyError("DNS1 格式无效")
@@ -47,6 +51,9 @@ def build_netsh_commands(name, prof):
             if not valid_ipv4(dns2):
                 raise ApplyError("DNS2 格式无效")
             cmds.append(f'netsh interface ip add dnsservers name={q} address={dns2} index=2 validate=no')
+    else:
+        # DNS follows DHCP (explicit dhcp mode, or global DNS disabled)
+        cmds.append(f'netsh interface ip set dnsservers name={q} source=dhcp')
     return cmds
 
 
@@ -67,12 +74,12 @@ Set-Content -LiteralPath '__RESULT__' -Value $log -Encoding UTF8
 """
 
 
-def apply_profile(name, prof, timeout=60):
+def apply_profile(name, prof, settings=None, timeout=60):
     """Apply a profile to adapter `name` (UAC elevation).
 
     Returns (success: bool, output_text: str)
     """
-    cmds = build_netsh_commands(name, prof)
+    cmds = build_netsh_commands(name, prof, settings)
     result_path = os.path.join(os.environ.get("TEMP", os.path.expanduser("~")),
                                f"wifiip_apply_{uuid.uuid4().hex}.log")
     if os.path.exists(result_path):

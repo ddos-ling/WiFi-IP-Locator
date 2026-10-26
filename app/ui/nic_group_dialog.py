@@ -85,17 +85,21 @@ class NicGroupDialog(AsyncDialogMixin, QDialog):
         form2 = QFormLayout()
         form2.setSpacing(16)
         form2.setHorizontalSpacing(16)
-        self.chk_dhcp = QCheckBox("使用 DHCP 自动获取")
+        self.chk_dhcp = QCheckBox("使用 DHCP 自动获取（地址）")
         self.chk_dhcp.toggled.connect(self._toggle_static)
         form2.addRow("", self.chk_dhcp)
         self.ed_ip = self._ip_field("192.168.1.100")
         self.ed_mask = self._ip_field("255.255.255.0")
         self.ed_gw = self._ip_field("192.168.1.1")
-        self.ed_dns1 = self._ip_field("223.5.5.5")
-        self.ed_dns2 = self._ip_field("114.114.114.114")
         form2.addRow("IP 地址", self.ed_ip)
         form2.addRow("子网掩码", self.ed_mask)
         form2.addRow("网关", self.ed_gw)
+        self.cb_dns_mode = QComboBox()
+        self.cb_dns_mode.addItems(["跟随全局 DNS", "自定义 DNS", "跟随 DHCP"])
+        self.cb_dns_mode.currentIndexChanged.connect(self._toggle_dns)
+        form2.addRow("DNS 模式", self.cb_dns_mode)
+        self.ed_dns1 = self._ip_field()
+        self.ed_dns2 = self._ip_field()
         form2.addRow("DNS1", self.ed_dns1)
         form2.addRow("DNS2", self.ed_dns2)
         root.addLayout(form2)
@@ -109,7 +113,7 @@ class NicGroupDialog(AsyncDialogMixin, QDialog):
         buttons.rejected.connect(self.reject)
         root.addWidget(buttons)
 
-    def _ip_field(self, placeholder):
+    def _ip_field(self, placeholder=""):
         ed = QLineEdit()
         ed.setValidator(_IPV4_RX)
         ed.setPlaceholderText(placeholder)
@@ -127,6 +131,9 @@ class NicGroupDialog(AsyncDialogMixin, QDialog):
         self.ed_dns1.setText(g.get("dns1", ""))
         self.ed_dns2.setText(g.get("dns2", ""))
         self._toggle_static(self.chk_dhcp.isChecked())
+        self.cb_dns_mode.setCurrentIndex({"global": 0, "custom": 1, "dhcp": 2}
+                                         .get(g.get("dns_mode", "global"), 0))
+        self._toggle_dns()
         for mac in g.get("macs", []):
             self._append_mac(mac)
 
@@ -185,8 +192,25 @@ class NicGroupDialog(AsyncDialogMixin, QDialog):
     # ---------- ip config ----------
 
     def _toggle_static(self, dhcp):
-        for w in (self.ed_ip, self.ed_mask, self.ed_gw, self.ed_dns1, self.ed_dns2):
+        for w in (self.ed_ip, self.ed_mask, self.ed_gw):
             w.setEnabled(not dhcp)
+
+    def _toggle_dns(self, index=None):
+        mode = self.cb_dns_mode.currentIndex()  # 0 global, 1 custom, 2 dhcp
+        custom = mode == 1
+        self.ed_dns1.setEnabled(custom)
+        self.ed_dns2.setEnabled(custom)
+        if mode == 0:
+            from ..storage import Config
+            s = Config.instance().settings
+            g1 = s.get("global_dns1", "") or "(未设置)"
+            g2 = s.get("global_dns2", "") or "(无)"
+            suffix = "（当前已启用）" if s.get("global_dns_enabled") else "（全局 DNS 未启用时跟随 DHCP）"
+            self.ed_dns1.setPlaceholderText(f"全局 DNS1：{g1}{suffix}")
+            self.ed_dns2.setPlaceholderText(f"全局 DNS2：{g2}")
+        else:
+            self.ed_dns1.setPlaceholderText("223.5.5.5")
+            self.ed_dns2.setPlaceholderText("114.114.114.114（可选）")
 
     def _on_accept(self):
         g = self._group
@@ -202,6 +226,8 @@ class NicGroupDialog(AsyncDialogMixin, QDialog):
         g["ip"] = self.ed_ip.text().strip()
         g["mask"] = self.ed_mask.text().strip()
         g["gateway"] = self.ed_gw.text().strip()
+        mode = {0: "global", 1: "custom", 2: "dhcp"}[self.cb_dns_mode.currentIndex()]
+        g["dns_mode"] = mode
         g["dns1"] = self.ed_dns1.text().strip()
         g["dns2"] = self.ed_dns2.text().strip()
         if not g["dhcp"]:
@@ -214,18 +240,15 @@ class NicGroupDialog(AsyncDialogMixin, QDialog):
             if g["gateway"] and not valid_ipv4(g["gateway"]):
                 self.lb_warn.setText("网关无效")
                 return
-            if g["dns1"] and not valid_ipv4(g["dns1"]):
-                self.lb_warn.setText("DNS1 无效")
+        if mode == "custom":
+            if not valid_ipv4(g["dns1"]):
+                self.lb_warn.setText("自定义 DNS 模式下 DNS1 必填且有效")
                 return
-            if g["dns2"]:
-                if not valid_ipv4(g["dns2"]):
-                    self.lb_warn.setText("DNS2 无效")
-                    return
-                if not g["dns1"]:
-                    self.lb_warn.setText("填写 DNS2 前必须先填写 DNS1")
-                    return
-        elif g["ip"] or g["mask"]:
-            g["ip"] = g["mask"] = g["gateway"] = g["dns1"] = g["dns2"] = ""
+            if g["dns2"] and not valid_ipv4(g["dns2"]):
+                self.lb_warn.setText("DNS2 无效")
+                return
+        else:
+            g["dns1"] = g["dns2"] = ""
         self.accept()
 
     def result_group(self):

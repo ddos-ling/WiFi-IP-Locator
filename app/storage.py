@@ -18,6 +18,9 @@ DEFAULTS = {
     "settings": {
         "scan_interval": 30,   # seconds between wifi scans
         "debounce": 2,         # consecutive confirmations before a location switch
+        "global_dns_enabled": False,
+        "global_dns1": "",
+        "global_dns2": "",
     },
     "points": [],
 }
@@ -47,6 +50,8 @@ def new_point(name, threshold=75.0):
 def migrate_point(point):
     """Upgrade old single-NIC 'profiles' entries into single-member groups"""
     if point.get("nic_groups"):
+        for grp in point["nic_groups"]:
+            grp.setdefault("dns_mode", "custom" if grp.get("dns1") else "global")
         return
     groups = []
     for prof in point.get("profiles", []):
@@ -55,6 +60,7 @@ def migrate_point(point):
         grp["macs"] = [mac] if mac else []
         if not grp.get("label"):
             grp["label"] = format_mac(mac)
+        grp.setdefault("dns_mode", "custom" if grp.get("dns1") else "global")
         groups.append(grp)
     point["nic_groups"] = groups
     point.pop("profiles", None)

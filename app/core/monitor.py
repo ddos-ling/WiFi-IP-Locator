@@ -8,27 +8,32 @@ from .nic_info import get_adapters, find_by_mac, is_connected
 from .wlan_api import scan_wifi, WlanError
 
 
-def profile_matches(prof, adapter):
-    """Whether an adapter's current config matches a profile"""
+def profile_matches(prof, adapter, settings=None):
+    """Whether an adapter's current config matches a profile (+ global DNS)"""
     if not prof or not adapter:
         return False
     dhcp_on = adapter.get("dhcp", "").lower() == "enabled"
     if prof.get("dhcp"):
-        return dhcp_on
-    if dhcp_on:
+        addr_ok = dhcp_on
+    else:
+        if dhcp_on:
+            return False
+        from .ip_utils import mask_to_prefix
+        addr_ok = ((adapter.get("ip") or "") == (prof.get("ip") or "")
+                   and mask_to_prefix(prof.get("mask") or "") in (0, adapter.get("prefix", 0))
+                   and (not prof.get("gateway") or adapter.get("gateway") == prof["gateway"]))
+    if not addr_ok:
         return False
-    from .ip_utils import mask_to_prefix
-    if (adapter.get("ip") or "") != (prof.get("ip") or ""):
-        return False
-    if mask_to_prefix(prof.get("mask") or "") not in (0, adapter.get("prefix", 0)):
-        return False
-    if prof.get("gateway") and adapter.get("gateway") != prof["gateway"]:
-        return False
-    dns = adapter.get("dns") or []
-    if prof.get("dns1") and (not dns or dns[0] != prof["dns1"]):
-        return False
-    if prof.get("dns2") and (len(dns) < 2 or dns[1] != prof["dns2"]):
-        return False
+    # DNS only verifiable when a static DNS is in effect; DHCP-provided
+    # DNS cannot be compared, so it is skipped
+    from .ip_utils import effective_dns
+    dns1, dns2 = effective_dns(prof, settings)
+    if dns1:
+        dns = adapter.get("dns") or []
+        if not dns or dns[0] != dns1:
+            return False
+        if dns2 and (len(dns) < 2 or dns[1] != dns2):
+            return False
     return True
 
 
@@ -144,7 +149,7 @@ class MonitorWorker(QThread):
                 if not ad:
                     continue
                 connected = is_connected(ad)
-                matched = profile_matches(grp, ad)
+                matched = profile_matches(grp, ad, self._config.settings)
                 entries.append({
                     "group": grp,
                     "adapter": ad,
