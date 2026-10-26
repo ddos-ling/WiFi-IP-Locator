@@ -10,12 +10,20 @@ from .ui.main_window import MainWindow
 
 
 def res_path(rel):
-    """Resolve an asset path both in dev and PyInstaller-frozen modes"""
-    base = getattr(sys, "_MEIPASS", None)
-    if base:
-        return os.path.join(base, rel)
+    """Resolve an asset path under PyInstaller, Nuitka and plain-python runs"""
+    candidates = []
+    meipass = getattr(sys, "_MEIPASS", None)          # PyInstaller
+    if meipass:
+        candidates.append(os.path.join(meipass, rel))
+    if getattr(sys, "frozen", False) or "__compiled__" in globals():
+        # Nuitka (standalone/onefile): data files sit beside the executable
+        candidates.append(os.path.join(os.path.dirname(os.path.abspath(sys.executable)), rel))
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    return os.path.join(root, rel)
+    candidates.append(os.path.join(root, rel))
+    for c in candidates:
+        if os.path.exists(c):
+            return c
+    return candidates[-1]
 
 
 def main():

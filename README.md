@@ -40,6 +40,17 @@ python run.py
 
 ## 构建单文件 EXE
 
+### 方式一：Nuitka（推荐，编译为原生代码）
+
+```powershell
+pip install nuitka
+build_nuitka.bat
+# 产物: build-nuitka\WiFi-IPLocator.exe
+# 首次构建会自动下载 MinGW64 工具链；LOGO 经 --windows-icon-from-ico 写入
+```
+
+### 方式二：PyInstaller
+
 ```powershell
 pip install pyinstaller
 build.bat
