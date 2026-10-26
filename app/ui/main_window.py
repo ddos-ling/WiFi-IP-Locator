@@ -78,9 +78,17 @@ class MainWindow(QMainWindow):
             ["组名", "成员网卡", "模式", "IP", "子网掩码", "网关", "DNS"])
         self.table_profiles.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table_profiles.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.table_profiles.horizontalHeader().setSectionResizeMode(
-            0, QHeaderView.ResizeMode.Stretch)
-        self.table_profiles.horizontalHeader().setStretchLastSection(True)
+        header = self.table_profiles.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        header.setStretchLastSection(True)
+        header.setCascadingSectionResizes(True)
+        self.table_profiles.setColumnWidth(0, 140)
+        self.table_profiles.setColumnWidth(1, 200)
+        self.table_profiles.setColumnWidth(2, 70)
+        self.table_profiles.setColumnWidth(3, 130)
+        self.table_profiles.setColumnWidth(4, 130)
+        self.table_profiles.setColumnWidth(5, 120)
+        self.table_profiles.setWordWrap(False)
         right.addWidget(self.table_profiles, 1)
         btn_row2 = QHBoxLayout()
         btn_row2.setSpacing(8)
@@ -194,7 +202,18 @@ class MainWindow(QMainWindow):
             self.table_profiles.insertRow(row)
             mode = "DHCP" if grp.get("dhcp") else "静态"
             macs = "\n".join(format_mac(m) for m in grp.get("macs", []))
-            dns = grp.get("dns1", "") + (f" / {grp['dns2']}" if grp.get("dns2") else "")
+            dns_mode = grp.get("dns_mode", "global")
+            if dns_mode == "custom":
+                dns = grp.get("dns1", "") + (f" / {grp['dns2']}" if grp.get("dns2") else "")
+            elif dns_mode == "dhcp":
+                dns = "跟随 DHCP"
+            else:
+                s = self._config.settings
+                if s.get("global_dns_enabled"):
+                    dns = f"全局 {s.get('global_dns1', '')}" + \
+                          (f" / {s.get('global_dns2', '')}" if s.get("global_dns2") else "")
+                else:
+                    dns = "跟随 DHCP（全局未启用）"
             values = [grp.get("label", ""), macs, mode,
                       grp.get("ip", ""), grp.get("mask", ""),
                       grp.get("gateway", ""), dns]
@@ -326,7 +345,7 @@ class MainWindow(QMainWindow):
         self._suppressed_point_id = None
         self.raise_()
         self._show_window()
-        self._mismatch_dialog = MismatchDialog(self, point, entries)
+        self._mismatch_dialog = MismatchDialog(self, point, entries, self._config.settings)
         result = self._mismatch_dialog.exec()
         self._mismatch_dialog = None
         if result != int(QDialog.DialogCode.Accepted):

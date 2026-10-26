@@ -94,7 +94,17 @@ def get_adapters(timeout=20, include_all=False):
 
 
 def is_connected(adapter):
-    return adapter.get("status", "").lower() == "up" and adapter.get("media", "").lower() == "connected"
+    """Whether the adapter is effectively in use.
+
+    Some drivers (and ICS networks) report media state inconsistently:
+    an adapter that is Up and holds a live IPv4 with a gateway is treated
+    as connected even when media state says otherwise.
+    """
+    if adapter.get("status", "").lower() != "up":
+        return False
+    if adapter.get("media", "").lower() == "connected":
+        return True
+    return bool(adapter.get("ip")) and bool(adapter.get("gateway"))
 
 
 def find_by_mac(adapters, mac):

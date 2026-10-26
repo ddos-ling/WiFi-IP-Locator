@@ -4,6 +4,7 @@ from PySide6.QtWidgets import (QButtonGroup, QDialog, QDialogButtonBox,
                                QRadioButton, QVBoxLayout)
 
 from ..core import ip_manager
+from ..core.ip_utils import effective_dns
 from ..storage import format_mac
 from .async_worker import AsyncDialogMixin, AsyncWorker
 
@@ -15,15 +16,18 @@ def _summarize_adapter(ad):
     return f"{mode} · {ip} · {gw}"
 
 
-def _summarize_profile(prof):
+def _summarize_profile(prof, settings=None):
     if prof.get("dhcp"):
-        return "DHCP 自动获取"
-    parts = [f"{prof.get('ip')}/{prof.get('mask')}"]
-    if prof.get("gateway"):
-        parts.append(f"网关 {prof['gateway']}")
-    if prof.get("dns1"):
-        dns = prof["dns1"] + (f", {prof['dns2']}" if prof.get("dns2") else "")
-        parts.append(f"DNS {dns}")
+        parts = ["DHCP 自动获取"]
+    else:
+        parts = [f"{prof.get('ip')}/{prof.get('mask')}"]
+        if prof.get("gateway"):
+            parts.append(f"网关 {prof['gateway']}")
+    dns1, dns2 = effective_dns(prof, settings)
+    if dns1:
+        parts.append(f"DNS {dns1}" + (f", {dns2}" if dns2 else ""))
+    else:
+        parts.append("DNS 跟随 DHCP")
     return " · ".join(parts)
 
 
@@ -34,12 +38,13 @@ class MismatchDialog(AsyncDialogMixin, QDialog):
     apply (applying the same static config to several NICs can break routing).
     """
 
-    def __init__(self, parent, point, entries):
+    def __init__(self, parent, point, entries, settings=None):
         super().__init__(parent)
         self.setWindowTitle("网络配置不符")
         self.setMinimumWidth(520)
         self._point = point
         self._entries = entries
+        self._settings = settings
         self._group = QButtonGroup(self)
         self._build_ui()
         self._select_default()
@@ -60,10 +65,13 @@ class MismatchDialog(AsyncDialogMixin, QDialog):
             grp = e["group"]
             ad = e["adapter"]
             state = "已连接" if e["connected"] else "未连接"
-            match_state = "✔ 配置一致" if e["matched"] else "配置不符"
+            if e["matched"]:
+                match_state = "✔ 配置一致" if e["connected"] else "配置一致（但未连接）"
+            else:
+                match_state = "配置不符"
             text = (f"{grp.get('label', '?')} · 成员 [{format_mac(ad['mac'])}] ({state})\n"
                     f"    当前：{_summarize_adapter(ad)}\n"
-                    f"    目标：{_summarize_profile(grp)}（{match_state}）")
+                    f"    目标：{_summarize_profile(grp, self._settings)}（{match_state}）")
             rb = QRadioButton(text)
             self._group.addButton(rb, i)
             box_layout.addWidget(rb)
@@ -113,9 +121,10 @@ class MismatchDialog(AsyncDialogMixin, QDialog):
         self.progress.show()
         self.lb_status.setText("正在应用配置，如弹出 UAC 授权窗口请点击「是」…")
         self.lb_status.show()
-        self._applied_summary = _summarize_profile(prof)
+        self._applied_summary = _summarize_profile(prof, self._settings)
 
-        self._worker = AsyncWorker(lambda: ip_manager.apply_profile(name, prof), parent=self)
+        self._worker = AsyncWorker(lambda: ip_manager.apply_profile(name, prof, self._settings),
+                                   parent=self)
         self._worker.done.connect(self._on_apply_done)
         self._worker.failed.connect(self._on_apply_failed)
         self._worker.finished.connect(self._worker.deleteLater)
