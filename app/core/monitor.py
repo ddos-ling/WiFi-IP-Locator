@@ -113,14 +113,16 @@ class MonitorWorker(QThread):
                 need_check = True
 
             first = False
-            if need_check:
-                self._force_check = False
-                point = self._config.get_point(self._current_point_id) if self._current_point_id else None
-                if point:
-                    self._check_network(point)
-                else:
-                    self.network_state.emit({"point": None, "ok": True, "entries": [],
-                                             "transition": False, "silent": True})
+            force = self._force_check
+            self._force_check = False
+            point = self._config.get_point(self._current_point_id) if self._current_point_id else None
+            if point:
+                # re-check every cycle so manual config drift is detected;
+                # transition/force flag lets the UI open the prompt dialog
+                self._check_network(point, transition=need_check)
+            elif need_check:
+                self.network_state.emit({"point": None, "ok": True, "entries": [],
+                                         "transition": True, "silent": True})
 
             if self._sleep(interval):
                 return
@@ -133,12 +135,12 @@ class MonitorWorker(QThread):
             return self._config.get_point(top["id"]), results
         return None, results
 
-    def _check_network(self, point):
+    def _check_network(self, point, transition=True):
         try:
             adapters = get_adapters()
         except Exception as exc:  # AdapterError or unexpected
             self.network_state.emit({"point": point, "ok": False, "entries": [],
-                                     "transition": True, "silent": True,
+                                     "transition": transition, "silent": True,
                                      "error": str(exc)})
             return
         entries = []
@@ -160,7 +162,7 @@ class MonitorWorker(QThread):
                     ok = True  # one live match inside a group is enough
         self.network_state.emit({
             "point": point, "ok": ok, "entries": entries,
-            "transition": True, "silent": False,
+            "transition": transition, "silent": False,
         })
 
     def _sleep(self, seconds):

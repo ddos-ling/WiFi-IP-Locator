@@ -24,6 +24,7 @@ class MainWindow(QMainWindow):
         self._monitor = None
         self._mismatch_dialog = None
         self._suppressed_point_id = None
+        self._last_net_ok = None
         self._last_scan_ts = 0.0
         self._force_quit = False
         self.setWindowTitle("WiFi IP 定位助手")
@@ -324,23 +325,35 @@ class MainWindow(QMainWindow):
         point = payload.get("point")
         if point is None:
             self.lb_net.setText("网络：—")
+            self._last_net_ok = None
             return
         if payload.get("error"):
             self.lb_net.setText(f"网络：检查失败（{payload['error']}）")
             return
-        if payload["ok"]:
+        ok = payload["ok"]
+        prev_ok = self._last_net_ok
+        self._last_net_ok = ok
+        # a fresh prompt is warranted on location switch, manual check,
+        # or when the state flips from OK to not-OK (config drift);
+        # while it stays not-OK the user is not nagged repeatedly
+        prompt_warranted = bool(payload.get("transition")) or prev_ok is True
+        if ok:
             self.lb_net.setText("网络：配置正常 ✔")
+            self._suppressed_point_id = None
             return
         self.lb_net.setText("网络：配置不符 ✘")
         entries = payload.get("entries") or []
         if not entries:
-            self.tray.showMessage("无法检查网络",
-                                  f"已定位到「{point['name']}」，但配置的网卡均不在位。",
-                                  QSystemTrayIcon.MessageIcon.Warning, 5000)
+            if prompt_warranted:
+                self.tray.showMessage("无法检查网络",
+                                      f"已定位到「{point['name']}」，但配置的网卡均不在位。",
+                                      QSystemTrayIcon.MessageIcon.Warning, 5000)
             return
         if self._mismatch_dialog is not None:
             return
         if self._suppressed_point_id == point["id"]:
+            return
+        if not prompt_warranted:
             return
         self._suppressed_point_id = None
         self.raise_()
@@ -349,7 +362,8 @@ class MainWindow(QMainWindow):
         result = self._mismatch_dialog.exec()
         self._mismatch_dialog = None
         if result != int(QDialog.DialogCode.Accepted):
-            # user ignored: do not re-prompt until the location changes
+            # user ignored: do not re-prompt until the state flips back to OK
+            # or the location changes
             self._suppressed_point_id = point["id"]
         self._monitor.force_network_check()
 

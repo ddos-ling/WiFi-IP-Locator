@@ -115,7 +115,7 @@ class MismatchDialog(AsyncDialogMixin, QDialog):
             return
         entry = self._entries[idx]
         name = entry["adapter"]["name"]
-        prof = entry["profile"]
+        prof = entry["group"]
 
         self._buttons.button(QDialogButtonBox.StandardButton.Ok).setEnabled(False)
         self.progress.show()
