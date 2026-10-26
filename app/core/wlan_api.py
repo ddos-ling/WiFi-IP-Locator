@@ -137,7 +137,8 @@ def _read_bss_list(handle, guid_struct):
     if rc != 0:
         raise WlanError(f"WlanGetNetworkBssList failed (error {rc})")
     try:
-        blob = ctypes.string_at(plist.contents, plist.contents.dwTotalSize)
+        blob = ctypes.string_at(ctypes.cast(plist, ctypes.c_void_p),
+                                plist.contents.dwTotalSize)
         count = plist.contents.dwNumberOfItems
         entries = []
         for i in range(count):
