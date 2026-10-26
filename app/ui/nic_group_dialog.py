@@ -1,6 +1,6 @@
 """NIC group editor: multiple member MACs sharing one IP configuration"""
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QRegularExpression, QRegularExpressionValidator
+from PySide6.QtCore import QRegularExpression, Qt
+from PySide6.QtGui import QRegularExpressionValidator
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox,
                                QFormLayout, QGroupBox, QHBoxLayout, QLabel,
                                QLineEdit, QListWidget, QListWidgetItem,
