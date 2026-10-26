@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox,
                                QPushButton, QVBoxLayout)
 
 from ..core.ip_utils import valid_ipv4, mask_to_prefix
-from ..core.nic_info import get_adapters
+from ..core.nic_info import get_adapters, is_connected
 from ..storage import format_mac, normalize_mac
 from .async_worker import AsyncDialogMixin, AsyncWorker
 
@@ -177,9 +177,13 @@ class NicGroupDialog(AsyncDialogMixin, QDialog):
         self._worker = None
         self._adapters = adapters or []
         self.cb_adapter.clear()
+        if not self._adapters:
+            self.cb_adapter.addItem("（未发现可用网卡，请在下方手动输入 MAC）", None)
+            self.cb_adapter.setEnabled(False)
+            return
         self.cb_adapter.setEnabled(True)
         for ad in self._adapters:
-            conn = "已连接" if ad.get("status", "").lower() == "up" else ""
+            conn = "已连接" if is_connected(ad) else ""
             text = f"{ad['name']} · {ad.get('desc') or '未知设备'}  [{format_mac(ad['mac'])}]  {conn}".strip()
             self.cb_adapter.addItem(text, ad)
             self.cb_adapter.setItemData(self.cb_adapter.count() - 1, text, Qt.ItemDataRole.ToolTipRole)
