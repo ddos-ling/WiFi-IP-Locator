@@ -173,8 +173,9 @@ class NicGroupDialog(AsyncDialogMixin, QDialog):
         self.cb_adapter.setEnabled(True)
         for ad in self._adapters:
             conn = "已连接" if ad.get("status", "").lower() == "up" else ""
-            text = f"{ad['name']}  [{format_mac(ad['mac'])}]  {conn}".strip()
+            text = f"{ad['name']} · {ad.get('desc') or '未知设备'}  [{format_mac(ad['mac'])}]  {conn}".strip()
             self.cb_adapter.addItem(text, ad)
+            self.cb_adapter.setItemData(self.cb_adapter.count() - 1, text, Qt.ItemDataRole.ToolTipRole)
 
     def _on_adapters_failed(self, message):
         self._worker = None

@@ -23,6 +23,7 @@ $adapters = Get-NetAdapter -ErrorAction SilentlyContinue | ForEach-Object {
     [pscustomobject]@{
         name    = $n
         mac     = $_.MacAddress
+        desc    = [string]$_.InterfaceDescription
         status  = [string]$_.Status
         media   = [string]$_.MediaConnectState
         dhcp    = [string]$(if ($ipif) { $ipif.Dhcp } else { '' })
@@ -40,11 +41,13 @@ class AdapterError(Exception):
     pass
 
 
-def get_adapters(timeout=20):
+def get_adapters(timeout=20, include_all=False):
     """Return list of adapter dicts.
 
-    {name, mac, status, media, dhcp, ip, prefix, gateway, dns[]}
+    {name, mac, desc, status, media, dhcp, ip, prefix, gateway, dns[]}
     mac normalized to 12 hex chars uppercase.
+    By default adapters without a MAC address and Bluetooth PAN devices
+    are excluded (they are useless for IP configuration).
     """
     try:
         proc = subprocess.run(
@@ -66,12 +69,19 @@ def get_adapters(timeout=20):
     result = []
     for a in data:
         mac = re.sub(r"[^0-9A-Fa-f]", "", a.get("mac") or "").upper()
+        desc = a.get("desc") or ""
+        if not include_all:
+            if not mac:
+                continue
+            if "bluetooth" in desc.lower():
+                continue
         dns = a.get("dns") or []
         if isinstance(dns, str):
             dns = [dns]
         result.append({
             "name": a.get("name") or "",
             "mac": mac,
+            "desc": desc,
             "status": a.get("status") or "",
             "media": a.get("media") or "",
             "dhcp": a.get("dhcp") or "",

@@ -5,14 +5,19 @@ from PySide6.QtCore import QThread, Signal
 class AsyncWorker(QThread):
     done = Signal(object)
     failed = Signal(str)
+    progress = Signal(object)   # optional intermediate progress payloads
 
-    def __init__(self, fn, parent=None):
+    def __init__(self, fn, parent=None, with_progress=False):
         super().__init__(parent)
         self._fn = fn
+        self._with_progress = with_progress
 
     def run(self):
         try:
-            result = self._fn()
+            if self._with_progress:
+                result = self._fn(self.progress.emit)
+            else:
+                result = self._fn()
         except Exception as exc:  # surface any failure to the UI thread
             self.failed.emit(str(exc))
         else:
