@@ -1,6 +1,6 @@
 """Geo point editor: name, threshold, SSID fingerprint selection"""
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QCursor
+from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox,
                                QDoubleSpinBox, QHBoxLayout, QLabel, QLineEdit,
                                QProgressBar, QPushButton, QTableWidget,
@@ -20,8 +20,9 @@ class PointEditor(AsyncDialogMixin, QDialog):
         self._point = point
         self._scan = []
         self._worker = None
+        self._checked = set()  # bssids currently ticked, survives rescans
         self.setWindowTitle("编辑地理点" if point.get("name") else "添加地理点")
-        self.setMinimumSize(620, 480)
+        self.setMinimumSize(620, 520)
         self._build_ui()
         self._precheck()
         self._do_scan()
@@ -87,10 +88,11 @@ class PointEditor(AsyncDialogMixin, QDialog):
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setColumnWidth(self.COL_CHECK, 50)
-        self.table.setColumnWidth(self.COL_SSID, 170)
+        self.table.setColumnWidth(self.COL_SSID, 190)
         self.table.setColumnWidth(self.COL_BSSID, 150)
         self.table.setColumnWidth(self.COL_CH, 60)
         self.table.setColumnWidth(self.COL_RSSI, 90)
+        self.table.itemChanged.connect(self._on_item_changed)
         root.addWidget(self.table, 1)
 
         self.lb_status = QLabel("")
@@ -102,7 +104,7 @@ class PointEditor(AsyncDialogMixin, QDialog):
         root.addWidget(buttons)
 
     def _precheck(self):
-        self._selected = {f["bssid"] for f in self._point.get("fingerprint", [])}
+        self._checked = {f["bssid"] for f in self._point.get("fingerprint", [])}
 
     def _do_scan(self):
         if self._worker is not None:
@@ -133,20 +135,68 @@ class PointEditor(AsyncDialogMixin, QDialog):
         self._fill_table()
 
     def _fill_table(self):
+        self.table.blockSignals(True)
         self.table.setRowCount(0)
-        for row, ap in enumerate(self._scan):
-            self.table.insertRow(row)
-            chk = QTableWidgetItem()
-            chk.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
-            chk.setCheckState(Qt.CheckState.Checked if ap["bssid"] in self._selected
-                              else Qt.CheckState.Unchecked)
-            self.table.setItem(row, self.COL_CHECK, chk)
-            self.table.setItem(row, self.COL_SSID, QTableWidgetItem(ap["ssid"]))
-            self.table.setItem(row, self.COL_BSSID, QTableWidgetItem(ap["bssid"]))
-            self.table.setItem(row, self.COL_CH, QTableWidgetItem(str(ap["channel"] or "-")))
-            self.table.setItem(row, self.COL_RSSI, QTableWidgetItem(str(ap["rssi"])))
-            self.table.setItem(row, self.COL_LINK, QTableWidgetItem(str(ap["link"])))
+        configured = {f["bssid"]: f for f in self._point.get("fingerprint", [])}
+        scanned = {ap["bssid"] for ap in self._scan}
+        for ap in self._scan:
+            self._insert_ap_row(ap, ap["bssid"] in configured)
+        missing = [f for f in configured.values() if f["bssid"] not in scanned]
+        for f in missing:
+            self._insert_missing_row(f)
+        self.table.blockSignals(False)
         self._refresh_ssid_combo()
+        if missing:
+            self.lb_status.setText(
+                f"{len(missing)} 个已配置 AP 本次未扫到（已标灰，弱信号在匹配时会被自动容忍）")
+
+    def _insert_ap_row(self, ap, is_configured):
+        row = self.table.rowCount()
+        self.table.insertRow(row)
+        chk = QTableWidgetItem()
+        chk.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
+        chk.setCheckState(Qt.CheckState.Checked if ap["bssid"] in self._checked
+                          else Qt.CheckState.Unchecked)
+        self.table.setItem(row, self.COL_CHECK, chk)
+        ssid_text = ap["ssid"] + ("　[已配置]" if is_configured else "")
+        self.table.setItem(row, self.COL_SSID, QTableWidgetItem(ssid_text))
+        self.table.setItem(row, self.COL_BSSID, QTableWidgetItem(ap["bssid"]))
+        self.table.setItem(row, self.COL_CH, QTableWidgetItem(str(ap["channel"] or "-")))
+        self.table.setItem(row, self.COL_RSSI, QTableWidgetItem(str(ap["rssi"])))
+        self.table.setItem(row, self.COL_LINK, QTableWidgetItem(str(ap["link"])))
+        if is_configured:
+            gray = QBrush(QColor(128, 128, 128))
+            for col in (self.COL_SSID, self.COL_BSSID):
+                self.table.item(row, col).setForeground(gray)
+
+    def _insert_missing_row(self, fp_entry):
+        row = self.table.rowCount()
+        self.table.insertRow(row)
+        chk = QTableWidgetItem()
+        chk.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
+        chk.setCheckState(Qt.CheckState.Checked if fp_entry["bssid"] in self._checked
+                          else Qt.CheckState.Unchecked)
+        self.table.setItem(row, self.COL_CHECK, chk)
+        self.table.setItem(row, self.COL_SSID,
+                           QTableWidgetItem(fp_entry.get("ssid", "?") + "　[已配置·未扫到]"))
+        self.table.setItem(row, self.COL_BSSID, QTableWidgetItem(fp_entry["bssid"]))
+        self.table.setItem(row, self.COL_CH, QTableWidgetItem("-"))
+        self.table.setItem(row, self.COL_RSSI, QTableWidgetItem("未扫到"))
+        self.table.setItem(row, self.COL_LINK, QTableWidgetItem("-"))
+        gray = QBrush(QColor(128, 128, 128))
+        for col in range(1, 6):
+            self.table.item(row, col).setForeground(gray)
+
+    def _on_item_changed(self, item):
+        if item.column() != self.COL_CHECK:
+            return
+        bssid_item = self.table.item(item.row(), self.COL_BSSID)
+        if not bssid_item:
+            return
+        if item.checkState() == Qt.CheckState.Checked:
+            self._checked.add(bssid_item.text())
+        else:
+            self._checked.discard(bssid_item.text())
 
     def _refresh_ssid_combo(self):
         keep = self.cb_ssid.currentText()
@@ -184,14 +234,16 @@ class PointEditor(AsyncDialogMixin, QDialog):
         if not name:
             self.lb_status.setText("请填写地理点名称")
             return
+        old_fp = {f["bssid"]: f for f in self._point.get("fingerprint", [])}
         selected = []
-        for row in range(self.table.rowCount()):
-            item = self.table.item(row, self.COL_CHECK)
-            if item and item.checkState() == Qt.CheckState.Checked:
-                bssid = self.table.item(row, self.COL_BSSID).text()
-                ap = next((a for a in self._scan if a["bssid"] == bssid), None)
-                if ap:
-                    selected.append({"bssid": ap["bssid"], "ssid": ap["ssid"], "rssi": ap["rssi"]})
+        for bssid in self._checked:
+            ap = next((a for a in self._scan if a["bssid"] == bssid), None)
+            if ap:
+                selected.append({"bssid": ap["bssid"], "ssid": ap["ssid"],
+                                 "rssi": ap["rssi"]})
+            elif bssid in old_fp:
+                # not seen this round: keep the last known record
+                selected.append(dict(old_fp[bssid]))
         if not selected:
             self.lb_status.setText("请至少勾选一个参与定位的 AP")
             return

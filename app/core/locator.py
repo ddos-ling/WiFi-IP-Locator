@@ -1,21 +1,36 @@
 """Fingerprint-based location matching"""
 
 
-def similarity(fp, scan):
-    """Score similarity between a fingerprint and the current scan.
+def signal_weight(rssi):
+    """Importance weight of a fingerprint AP by its signal strength.
 
-    fp / scan: {bssid: rssi}
-    Returns 0-100. Half weight on AP coverage, half on signal closeness
-    (50 dBm difference treated as fully mismatched).
+    -45 dBm and stronger => 1.0; -95 dBm and weaker => 0.1; linear between.
+    Weak APs barely affect the score when they go missing, strong APs do.
     """
-    if not fp or not scan:
+    return max(0.1, min(1.0, (rssi + 95.0) / 50.0))
+
+
+def similarity(fp, scan):
+    """Signal-weighted coverage score between a fingerprint and a scan (0-100).
+
+    - Only fingerprint APs count: unrelated surrounding APs add no noise.
+    - A missing AP costs its weight, so weak APs may drop out freely while
+      a strong AP going missing drags the score down hard.
+    - Present APs additionally lose points by signal drift (50 dBm full loss).
+    """
+    if not fp:
         return 0.0
-    common = set(fp) & set(scan)
-    if not common:
+    total = 0.0
+    got = 0.0
+    for bssid, rssi in fp.items():
+        w = signal_weight(rssi)
+        total += w
+        cur = scan.get(bssid)
+        if cur is not None:
+            got += w * (1.0 - min(abs(rssi - cur) / 50.0, 1.0))
+    if total <= 0:
         return 0.0
-    coverage = len(common) / max(len(fp), len(scan))
-    signal = sum(1.0 - min(abs(fp[b] - scan[b]) / 50.0, 1.0) for b in common) / len(common)
-    return round((0.5 * coverage + 0.5 * signal) * 100, 1)
+    return round(got / total * 100.0, 1)
 
 
 def evaluate_points(points, scan):
