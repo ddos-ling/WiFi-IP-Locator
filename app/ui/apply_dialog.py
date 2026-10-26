@@ -53,18 +53,17 @@ class MismatchDialog(AsyncDialogMixin, QDialog):
         title.setWordWrap(True)
         root.addWidget(title)
 
-        box = QGroupBox("候选网卡（选择一张应用配置）")
+        box = QGroupBox("候选网卡（选择一张应用其所在组的配置）")
         box_layout = QVBoxLayout(box)
         box_layout.setSpacing(12)
         for i, e in enumerate(self._entries):
-            prof = e["profile"]
+            grp = e["group"]
             ad = e["adapter"]
             state = "已连接" if e["connected"] else "未连接"
             match_state = "✔ 配置一致" if e["matched"] else "配置不符"
-            text = (f"{prof.get('label') or format_mac(prof.get('mac', ''))} "
-                    f"[{format_mac(ad['mac'])}] ({state})\n"
+            text = (f"{grp.get('label', '?')} · 成员 [{format_mac(ad['mac'])}] ({state})\n"
                     f"    当前：{_summarize_adapter(ad)}\n"
-                    f"    目标：{_summarize_profile(prof)}（{match_state}）")
+                    f"    目标：{_summarize_profile(grp)}（{match_state}）")
             rb = QRadioButton(text)
             self._group.addButton(rb, i)
             box_layout.addWidget(rb)

@@ -137,16 +137,22 @@ class MonitorWorker(QThread):
                                      "error": str(exc)})
             return
         entries = []
-        for prof in point.get("profiles", []):
-            ad = find_by_mac(adapters, prof.get("mac", ""))
-            if ad:
+        ok = False
+        for grp in point.get("nic_groups", []):
+            for mac in grp.get("macs", []):
+                ad = find_by_mac(adapters, mac)
+                if not ad:
+                    continue
+                connected = is_connected(ad)
+                matched = profile_matches(grp, ad)
                 entries.append({
-                    "profile": prof,
+                    "group": grp,
                     "adapter": ad,
-                    "connected": is_connected(ad),
-                    "matched": profile_matches(prof, ad),
+                    "connected": connected,
+                    "matched": matched,
                 })
-        ok = any(e["connected"] and e["matched"] for e in entries)
+                if connected and matched:
+                    ok = True  # one live match inside a group is enough
         self.network_state.emit({
             "point": point, "ok": ok, "entries": entries,
             "transition": True, "silent": False,

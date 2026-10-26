@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (QApplication, QDialog, QGroupBox, QHBoxLayout,
 from ..storage import Config, format_mac, new_point
 from ..core.monitor import MonitorWorker
 from .point_editor import PointEditor
-from .nic_profile_dialog import NicProfileDialog
+from .nic_group_dialog import NicGroupDialog
 from .settings_dialog import SettingsDialog
 from .apply_dialog import MismatchDialog
 from .locate_detail import LocateDetailDialog
@@ -68,14 +68,14 @@ class MainWindow(QMainWindow):
         left.addLayout(btn_row)
         layout.addLayout(left, 5)
 
-        # right: profiles
+        # right: NIC groups
         right = QVBoxLayout()
         right.setSpacing(8)
-        self.lb_profiles = QLabel("网络配置文件（未选择地理点）")
+        self.lb_profiles = QLabel("网卡组（未选择地理点）")
         right.addWidget(self.lb_profiles)
         self.table_profiles = QTableWidget(0, 7)
         self.table_profiles.setHorizontalHeaderLabels(
-            ["备注名", "MAC", "模式", "IP", "子网掩码", "网关", "DNS"])
+            ["组名", "成员网卡", "模式", "IP", "子网掩码", "网关", "DNS"])
         self.table_profiles.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table_profiles.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table_profiles.horizontalHeader().setSectionResizeMode(
@@ -84,11 +84,11 @@ class MainWindow(QMainWindow):
         right.addWidget(self.table_profiles, 1)
         btn_row2 = QHBoxLayout()
         btn_row2.setSpacing(8)
-        btn_p_add = QPushButton("添加配置")
+        btn_p_add = QPushButton("添加网卡组")
         btn_p_add.clicked.connect(self._add_profile)
-        btn_p_edit = QPushButton("编辑配置")
+        btn_p_edit = QPushButton("编辑")
         btn_p_edit.clicked.connect(self._edit_profile)
-        btn_p_del = QPushButton("删除配置")
+        btn_p_del = QPushButton("删除")
         btn_p_del.clicked.connect(self._delete_profile)
         btn_check = QPushButton("立即检查")
         btn_check.clicked.connect(self._force_check)
@@ -180,21 +180,24 @@ class MainWindow(QMainWindow):
     def _refresh_profiles(self):
         point = self._selected_point()
         if not point:
-            self.lb_profiles.setText("网络配置文件（未选择地理点）")
+            self.lb_profiles.setText("网卡组（未选择地理点）")
             self.table_profiles.setRowCount(0)
             return
         n_fp = len(point.get("fingerprint", []))
+        n_groups = len(point.get("nic_groups", []))
+        n_macs = sum(len(g.get("macs", [])) for g in point.get("nic_groups", []))
         self.lb_profiles.setText(
-            f"「{point['name']}」网络配置文件（指纹 {n_fp} 个 AP · 阈值 {point['threshold']:.0f}%）")
+            f"「{point['name']}」网卡组（{n_groups} 组 · {n_macs} 张网卡 · 指纹 {n_fp} AP · 阈值 {point['threshold']:.0f}%）")
         self.table_profiles.setRowCount(0)
-        for prof in point.get("profiles", []):
+        for grp in point.get("nic_groups", []):
             row = self.table_profiles.rowCount()
             self.table_profiles.insertRow(row)
-            mode = "DHCP" if prof.get("dhcp") else "静态"
-            dns = prof.get("dns1", "") + (f" / {prof['dns2']}" if prof.get("dns2") else "")
-            values = [prof.get("label", ""), format_mac(prof.get("mac", "")), mode,
-                      prof.get("ip", ""), prof.get("mask", ""),
-                      prof.get("gateway", ""), dns]
+            mode = "DHCP" if grp.get("dhcp") else "静态"
+            macs = "\n".join(format_mac(m) for m in grp.get("macs", []))
+            dns = grp.get("dns1", "") + (f" / {grp['dns2']}" if grp.get("dns2") else "")
+            values = [grp.get("label", ""), macs, mode,
+                      grp.get("ip", ""), grp.get("mask", ""),
+                      grp.get("gateway", ""), dns]
             for col, v in enumerate(values):
                 self.table_profiles.setItem(row, col, QTableWidgetItem(v))
 
@@ -223,10 +226,10 @@ class MainWindow(QMainWindow):
         point = self._selected_point()
         if not point:
             return
-        n_profiles = len(point.get("profiles", []))
+        n_groups = len(point.get("nic_groups", []))
         msg = f"确定删除地理点「{point['name']}」？"
-        if n_profiles:
-            msg += f"\n其下 {n_profiles} 个网卡配置文件将一并删除。"
+        if n_groups:
+            msg += f"\n其下 {n_groups} 个网卡组将一并删除。"
         if QMessageBox.question(self, "删除地理点", msg) == QMessageBox.StandardButton.Yes:
             self._config.remove_point(point["id"])
             self._refresh_point_list()
@@ -235,18 +238,18 @@ class MainWindow(QMainWindow):
 
     def _current_profile(self, point):
         row = self.table_profiles.currentRow()
-        if row < 0 or row >= len(point.get("profiles", [])):
+        if row < 0 or row >= len(point.get("nic_groups", [])):
             return None
-        return point["profiles"][row]
+        return point["nic_groups"][row]
 
     def _add_profile(self):
         point = self._selected_point()
         if not point:
             QMessageBox.information(self, "提示", "请先选择一个地理点")
             return
-        dlg = NicProfileDialog(self, None)  # adapters load async inside the dialog
+        dlg = NicGroupDialog(self, None)
         if dlg.exec():
-            point["profiles"].append(dlg.result_profile())
+            point.setdefault("nic_groups", []).append(dlg.result_group())
             self._config.save()
             self._refresh_profiles()
             self._monitor.force_network_check()
@@ -255,14 +258,14 @@ class MainWindow(QMainWindow):
         point = self._selected_point()
         if not point:
             return
-        prof = self._current_profile(point)
-        if not prof:
-            QMessageBox.information(self, "提示", "请先选择一条配置")
+        grp = self._current_profile(point)
+        if not grp:
+            QMessageBox.information(self, "提示", "请先选择一个网卡组")
             return
         import copy
-        dlg = NicProfileDialog(self, copy.deepcopy(prof))
+        dlg = NicGroupDialog(self, copy.deepcopy(grp))
         if dlg.exec():
-            prof.update(dlg.result_profile())
+            grp.update(dlg.result_group())
             self._config.save()
             self._refresh_profiles()
             self._monitor.force_network_check()
@@ -271,14 +274,14 @@ class MainWindow(QMainWindow):
         point = self._selected_point()
         if not point:
             return
-        prof = self._current_profile(point)
-        if not prof:
-            QMessageBox.information(self, "提示", "请先选择一条配置")
+        grp = self._current_profile(point)
+        if not grp:
+            QMessageBox.information(self, "提示", "请先选择一个网卡组")
             return
         if QMessageBox.question(
-                self, "删除配置",
-                f"确定删除网卡配置「{prof.get('label')}」？") == QMessageBox.StandardButton.Yes:
-            point["profiles"].remove(prof)
+                self, "删除网卡组",
+                f"确定删除网卡组「{grp.get('label')}」？") == QMessageBox.StandardButton.Yes:
+            point["nic_groups"].remove(grp)
             self._config.save()
             self._refresh_profiles()
 

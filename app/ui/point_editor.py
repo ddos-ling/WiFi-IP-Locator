@@ -1,9 +1,10 @@
 """Geo point editor: name, threshold, SSID fingerprint selection"""
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QCursor
-from PySide6.QtWidgets import (QCheckBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
-                               QHBoxLayout, QLabel, QLineEdit, QProgressBar,
-                               QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout)
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox,
+                               QDoubleSpinBox, QHBoxLayout, QLabel, QLineEdit,
+                               QProgressBar, QPushButton, QTableWidget,
+                               QTableWidgetItem, QVBoxLayout)
 
 from ..core.wlan_api import scan_wifi
 from .async_worker import AsyncDialogMixin, AsyncWorker
@@ -55,6 +56,24 @@ class PointEditor(AsyncDialogMixin, QDialog):
         self.lb_scan_time = QLabel("")
         btn_row.addWidget(self.lb_scan_time, 1)
         root.addLayout(btn_row)
+
+        # one-click selection by SSID (deduplicated across BSSIDs)
+        ssid_row = QHBoxLayout()
+        ssid_row.setSpacing(8)
+        ssid_row.addWidget(QLabel("按 SSID 选择"))
+        self.cb_ssid = QComboBox()
+        self.cb_ssid.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        ssid_row.addWidget(self.cb_ssid, 1)
+        btn_pick_ssid = QPushButton("勾选该 SSID 全部 AP")
+        btn_pick_ssid.clicked.connect(self._on_pick_ssid)
+        ssid_row.addWidget(btn_pick_ssid)
+        btn_all = QPushButton("全选")
+        btn_all.clicked.connect(lambda: self._set_all_checked(Qt.CheckState.Checked))
+        ssid_row.addWidget(btn_all)
+        btn_none = QPushButton("清空")
+        btn_none.clicked.connect(lambda: self._set_all_checked(Qt.CheckState.Unchecked))
+        ssid_row.addWidget(btn_none)
+        root.addLayout(ssid_row)
 
         self.progress = QProgressBar()
         self.progress.setRange(0, 0)  # indeterminate "loading" animation
@@ -127,6 +146,38 @@ class PointEditor(AsyncDialogMixin, QDialog):
             self.table.setItem(row, self.COL_CH, QTableWidgetItem(str(ap["channel"] or "-")))
             self.table.setItem(row, self.COL_RSSI, QTableWidgetItem(str(ap["rssi"])))
             self.table.setItem(row, self.COL_LINK, QTableWidgetItem(str(ap["link"])))
+        self._refresh_ssid_combo()
+
+    def _refresh_ssid_combo(self):
+        keep = self.cb_ssid.currentText()
+        self.cb_ssid.blockSignals(True)
+        self.cb_ssid.clear()
+        seen = set()
+        for ap in self._scan:
+            ssid = ap["ssid"]
+            if ssid in seen:
+                continue
+            seen.add(ssid)
+            self.cb_ssid.addItem(ssid)
+        self.cb_ssid.blockSignals(False)
+        idx = self.cb_ssid.findText(keep)
+        if idx >= 0:
+            self.cb_ssid.setCurrentIndex(idx)
+
+    def _on_pick_ssid(self):
+        ssid = self.cb_ssid.currentText()
+        if not ssid:
+            return
+        count = 0
+        for row in range(self.table.rowCount()):
+            if self.table.item(row, self.COL_SSID).text() == ssid:
+                self.table.item(row, self.COL_CHECK).setCheckState(Qt.CheckState.Checked)
+                count += 1
+        self.lb_status.setText(f"已勾选 SSID「{ssid}」下的 {count} 个 AP")
+
+    def _set_all_checked(self, state):
+        for row in range(self.table.rowCount()):
+            self.table.item(row, self.COL_CHECK).setCheckState(state)
 
     def _on_accept(self):
         name = self.ed_name.text().strip()

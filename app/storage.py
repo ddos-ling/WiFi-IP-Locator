@@ -40,8 +40,24 @@ def new_point(name, threshold=75.0):
         "name": name,
         "threshold": float(threshold),
         "fingerprint": [],   # [{bssid, ssid, rssi}]
-        "profiles": [],      # [{mac, label, dhcp, ip, mask, gateway, dns1, dns2}]
+        "nic_groups": [],    # [{label, macs[], dhcp, ip, mask, gateway, dns1, dns2}]
     }
+
+
+def migrate_point(point):
+    """Upgrade old single-NIC 'profiles' entries into single-member groups"""
+    if point.get("nic_groups"):
+        return
+    groups = []
+    for prof in point.get("profiles", []):
+        grp = dict(prof)
+        mac = grp.pop("mac", "")
+        grp["macs"] = [mac] if mac else []
+        if not grp.get("label"):
+            grp["label"] = format_mac(mac)
+        groups.append(grp)
+    point["nic_groups"] = groups
+    point.pop("profiles", None)
 
 
 class Config:
@@ -66,6 +82,8 @@ class Config:
         self._data = copy.deepcopy(DEFAULTS)
         self._data["settings"].update(data.get("settings") or {})
         self._data["points"] = data.get("points") or []
+        for point in self._data["points"]:
+            migrate_point(point)
 
     def save(self):
         os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
