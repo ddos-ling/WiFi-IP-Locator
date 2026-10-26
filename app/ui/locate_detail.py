@@ -1,14 +1,14 @@
 """Locate detail: show similarity scores of all points right now"""
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QCursor
-from PySide6.QtWidgets import (QApplication, QDialog, QDialogButtonBox, QLabel,
-                               QTableWidget, QTableWidgetItem, QVBoxLayout)
+from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QLabel,
+                               QProgressBar, QTableWidget, QTableWidgetItem,
+                               QVBoxLayout)
 
 from ..core.locator import evaluate_points
-from ..core.wlan_api import scan_wifi, WlanError
+from ..core.wlan_api import scan_wifi
+from .async_worker import AsyncDialogMixin, AsyncWorker
 
 
-class LocateDetailDialog(QDialog):
+class LocateDetailDialog(AsyncDialogMixin, QDialog):
     def __init__(self, parent, config):
         super().__init__(parent)
         self._config = config
@@ -23,6 +23,12 @@ class LocateDetailDialog(QDialog):
         self.lb_summary = QLabel("")
         self.lb_summary.setWordWrap(True)
         root.addWidget(self.lb_summary)
+
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 0)  # indeterminate "loading" animation
+        self.progress.setTextVisible(False)
+        self.progress.hide()
+        root.addWidget(self.progress)
 
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(["地理点", "当前相似度", "阈值", "结果"])
@@ -43,19 +49,34 @@ class LocateDetailDialog(QDialog):
         if not points:
             self.lb_summary.setText("尚未添加任何地理点")
             return
-        QApplication.setOverrideCursor(QCursor(Qt.CursorShape.WaitCursor))
-        self.lb_summary.setText("正在扫描…")
-        QApplication.processEvents()
-        try:
-            scan = scan_wifi()
-            results = evaluate_points(points, scan)
-        except WlanError as exc:
-            self.lb_summary.setText(f"扫描失败：{exc}")
-            self.table.setRowCount(0)
-            return
-        finally:
-            QApplication.restoreOverrideCursor()
+        if self._worker is not None:
+            return  # refresh already running
+        self.progress.show()
+        self.lb_summary.setText("正在扫描周围 WiFi，请稍候…")
 
+        def _run():
+            scan = scan_wifi()
+            return scan, evaluate_points(points, scan)
+
+        self._worker = AsyncWorker(_run, parent=self)
+        self._worker.done.connect(self._on_done)
+        self._worker.failed.connect(self._on_failed)
+        self._worker.finished.connect(self._worker.deleteLater)
+        self._worker.start()
+
+    def _on_done(self, pair):
+        self._worker = None
+        self.progress.hide()
+        scan, results = pair
+        self._fill(results)
+
+    def _on_failed(self, message):
+        self._worker = None
+        self.progress.hide()
+        self.lb_summary.setText(f"扫描失败：{message}")
+        self.table.setRowCount(0)
+
+    def _fill(self, results):
         self.table.setRowCount(0)
         for r in results:
             row = self.table.rowCount()

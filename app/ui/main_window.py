@@ -9,7 +9,6 @@ from PySide6.QtWidgets import (QApplication, QDialog, QGroupBox, QHBoxLayout,
 
 from ..storage import Config, format_mac, new_point
 from ..core.monitor import MonitorWorker
-from ..core.nic_info import get_adapters
 from .point_editor import PointEditor
 from .nic_profile_dialog import NicProfileDialog
 from .settings_dialog import SettingsDialog
@@ -245,8 +244,7 @@ class MainWindow(QMainWindow):
         if not point:
             QMessageBox.information(self, "提示", "请先选择一个地理点")
             return
-        adapters = self._safe_adapters()
-        dlg = NicProfileDialog(self, None, adapters)
+        dlg = NicProfileDialog(self, None)  # adapters load async inside the dialog
         if dlg.exec():
             point["profiles"].append(dlg.result_profile())
             self._config.save()
@@ -262,8 +260,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "提示", "请先选择一条配置")
             return
         import copy
-        adapters = self._safe_adapters()
-        dlg = NicProfileDialog(self, copy.deepcopy(prof), adapters)
+        dlg = NicProfileDialog(self, copy.deepcopy(prof))
         if dlg.exec():
             prof.update(dlg.result_profile())
             self._config.save()
@@ -284,12 +281,6 @@ class MainWindow(QMainWindow):
             point["profiles"].remove(prof)
             self._config.save()
             self._refresh_profiles()
-
-    def _safe_adapters(self):
-        try:
-            return get_adapters()
-        except Exception:
-            return []
 
     # ---------- monitor slots ----------
 

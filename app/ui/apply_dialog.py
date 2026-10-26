@@ -1,10 +1,11 @@
 """Mismatch dialog: prompt user to apply a NIC profile"""
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QButtonGroup, QDialog, QDialogButtonBox,
-                               QLabel, QRadioButton, QVBoxLayout)
+                               QGroupBox, QLabel, QMessageBox, QProgressBar,
+                               QRadioButton, QVBoxLayout)
 
 from ..core import ip_manager
 from ..storage import format_mac
+from .async_worker import AsyncDialogMixin, AsyncWorker
 
 
 def _summarize_adapter(ad):
@@ -26,7 +27,7 @@ def _summarize_profile(prof):
     return " · ".join(parts)
 
 
-class MismatchDialog(QDialog):
+class MismatchDialog(AsyncDialogMixin, QDialog):
     """Shown when located at a point but no configured NIC matches.
 
     Multiple configured NICs may be present; the user picks exactly ONE to
@@ -52,7 +53,6 @@ class MismatchDialog(QDialog):
         title.setWordWrap(True)
         root.addWidget(title)
 
-        from PySide6.QtWidgets import QGroupBox
         box = QGroupBox("候选网卡（选择一张应用配置）")
         box_layout = QVBoxLayout(box)
         box_layout.setSpacing(12)
@@ -70,13 +70,23 @@ class MismatchDialog(QDialog):
             box_layout.addWidget(rb)
         root.addWidget(box)
 
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok |
-                                   QDialogButtonBox.StandardButton.Cancel)
-        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("应用所选配置")
-        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("忽略")
-        buttons.accepted.connect(self._on_apply)
-        buttons.rejected.connect(self.reject)
-        root.addWidget(buttons)
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 0)  # indeterminate "loading" animation
+        self.progress.setTextVisible(False)
+        self.progress.hide()
+        root.addWidget(self.progress)
+
+        self.lb_status = QLabel("")
+        self.lb_status.hide()
+        root.addWidget(self.lb_status)
+
+        self._buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok |
+                                         QDialogButtonBox.StandardButton.Cancel)
+        self._buttons.button(QDialogButtonBox.StandardButton.Ok).setText("应用所选配置")
+        self._buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("忽略")
+        self._buttons.accepted.connect(self._on_apply)
+        self._buttons.rejected.connect(self.reject)
+        root.addWidget(self._buttons)
 
     def _select_default(self):
         for i, e in enumerate(self._entries):
@@ -91,21 +101,42 @@ class MismatchDialog(QDialog):
             self._group.button(0).setChecked(True)
 
     def _on_apply(self):
+        if self._worker is not None:
+            return  # already applying
         idx = self._group.checkedId()
         if idx < 0:
             return
         entry = self._entries[idx]
         name = entry["adapter"]["name"]
         prof = entry["profile"]
-        from PySide6.QtWidgets import QMessageBox
-        try:
-            ok, text = ip_manager.apply_profile(name, prof)
-        except ip_manager.ApplyError as exc:
-            QMessageBox.warning(self, "应用失败", str(exc))
-            return
+
+        self._buttons.button(QDialogButtonBox.StandardButton.Ok).setEnabled(False)
+        self.progress.show()
+        self.lb_status.setText("正在应用配置，如弹出 UAC 授权窗口请点击「是」…")
+        self.lb_status.show()
+        self._applied_summary = _summarize_profile(prof)
+
+        self._worker = AsyncWorker(lambda: ip_manager.apply_profile(name, prof), parent=self)
+        self._worker.done.connect(self._on_apply_done)
+        self._worker.failed.connect(self._on_apply_failed)
+        self._worker.finished.connect(self._worker.deleteLater)
+        self._worker.start()
+
+    def _on_apply_done(self, pair):
+        ok, text = pair
+        self._worker = None
+        self.progress.hide()
+        self.lb_status.hide()
+        self._buttons.button(QDialogButtonBox.StandardButton.Ok).setEnabled(True)
         if ok:
-            QMessageBox.information(self, "完成",
-                                    f"已将「{name}」应用为：{_summarize_profile(prof)}")
+            QMessageBox.information(self, "完成", f"配置已应用：{self._applied_summary}")
             self.accept()
         else:
             QMessageBox.warning(self, "应用失败", f"netsh 返回错误：\n{text[-600:]}")
+
+    def _on_apply_failed(self, message):
+        self._worker = None
+        self.progress.hide()
+        self.lb_status.hide()
+        self._buttons.button(QDialogButtonBox.StandardButton.Ok).setEnabled(True)
+        QMessageBox.warning(self, "应用失败", message)

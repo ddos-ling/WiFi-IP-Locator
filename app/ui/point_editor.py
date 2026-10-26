@@ -2,13 +2,14 @@
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import (QCheckBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
-                               QHBoxLayout, QLabel, QLineEdit, QPushButton,
-                               QTableWidget, QTableWidgetItem, QVBoxLayout)
+                               QHBoxLayout, QLabel, QLineEdit, QProgressBar,
+                               QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout)
 
-from ..core.wlan_api import scan_wifi, WlanError
+from ..core.wlan_api import scan_wifi
+from .async_worker import AsyncDialogMixin, AsyncWorker
 
 
-class PointEditor(QDialog):
+class PointEditor(AsyncDialogMixin, QDialog):
     """Create or edit a geo point (works on a copy; caller applies on accept)"""
 
     COL_CHECK, COL_SSID, COL_BSSID, COL_CH, COL_RSSI, COL_LINK = range(6)
@@ -17,6 +18,7 @@ class PointEditor(QDialog):
         super().__init__(parent)
         self._point = point
         self._scan = []
+        self._worker = None
         self.setWindowTitle("编辑地理点" if point.get("name") else "添加地理点")
         self.setMinimumSize(620, 480)
         self._build_ui()
@@ -54,6 +56,12 @@ class PointEditor(QDialog):
         btn_row.addWidget(self.lb_scan_time, 1)
         root.addLayout(btn_row)
 
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 0)  # indeterminate "loading" animation
+        self.progress.setTextVisible(False)
+        self.progress.hide()
+        root.addWidget(self.progress)
+
         self.table = QTableWidget(0, 6)
         self.table.setHorizontalHeaderLabels(["选择", "SSID", "BSSID (MAC)", "信道", "信号 (dBm)", "链路质量"])
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -78,17 +86,31 @@ class PointEditor(QDialog):
         self._selected = {f["bssid"] for f in self._point.get("fingerprint", [])}
 
     def _do_scan(self):
+        if self._worker is not None:
+            return  # a scan is already running
+        self._worker = AsyncWorker(lambda: scan_wifi(scan_wait_ms=2200), parent=self)
+        self._worker.done.connect(self._on_scan_done)
+        self._worker.failed.connect(self._on_scan_failed)
+        self._worker.finished.connect(self._worker.deleteLater)
         self.btn_scan.setEnabled(False)
-        self.lb_status.setText("正在扫描…")
-        try:
-            self._scan = scan_wifi(scan_wait_ms=2200)
-        except WlanError as exc:
-            self._scan = []
-            self.lb_status.setText(f"扫描失败：{exc}")
-        else:
-            self.lb_status.setText(f"扫描到 {len(self._scan)} 个 AP")
-        finally:
-            self.btn_scan.setEnabled(True)
+        self.progress.show()
+        self.lb_status.setText("正在扫描周围 WiFi，请稍候…")
+        self._worker.start()
+
+    def _on_scan_done(self, scan):
+        self._scan = scan
+        self.lb_status.setText(f"扫描到 {len(self._scan)} 个 AP")
+        self._finish_scan()
+
+    def _on_scan_failed(self, message):
+        self._scan = []
+        self.lb_status.setText(f"扫描失败：{message}")
+        self._finish_scan()
+
+    def _finish_scan(self):
+        self._worker = None
+        self.progress.hide()
+        self.btn_scan.setEnabled(True)
         self._fill_table()
 
     def _fill_table(self):

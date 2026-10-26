@@ -7,23 +7,29 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox,
 from ..core.nic_info import get_adapters
 from ..core.ip_utils import valid_ipv4, mask_to_prefix
 from ..storage import format_mac, normalize_mac
+from .async_worker import AsyncDialogMixin, AsyncWorker
 
 _IPV4_RX = QRegularExpressionValidator(QRegularExpression(r"^(?:\d{1,3}\.){3}\d{1,3}$"))
 
 
-class NicProfileDialog(QDialog):
+class NicProfileDialog(AsyncDialogMixin, QDialog):
     """Create or edit a NIC profile entry"""
 
     def __init__(self, parent, profile=None, adapters=None):
         super().__init__(parent)
         self.setWindowTitle("编辑网卡配置" if profile else "添加网卡配置")
         self.setMinimumWidth(460)
-        self._adapters = adapters or []
+        self._adapters = []
+        self._worker = None
         self._profile = dict(profile or {"mac": "", "label": "", "dhcp": True,
                                          "ip": "", "mask": "", "gateway": "",
                                          "dns1": "", "dns2": ""})
         self._build_ui()
         self._fill()
+        if adapters is not None:
+            self._on_adapters_loaded(adapters)
+        else:
+            self._load_adapters_async()
 
     def _build_ui(self):
         root = QVBoxLayout(self)
@@ -34,10 +40,8 @@ class NicProfileDialog(QDialog):
         form.setHorizontalSpacing(16)
 
         self.cb_adapter = QComboBox()
-        self.cb_adapter.addItem("(手动输入)", None)
-        for ad in self._adapters:
-            text = f"{ad['name']}  [{format_mac(ad['mac'])}]  {'已连接' if ad.get('_conn') else ''}"
-            self.cb_adapter.addItem(text.strip(), ad)
+        self.cb_adapter.addItem("正在读取网卡列表…", None)
+        self.cb_adapter.setEnabled(False)
         self.cb_adapter.currentIndexChanged.connect(self._on_pick_adapter)
         form.addRow("选择在位网卡", self.cb_adapter)
 
@@ -94,6 +98,30 @@ class NicProfileDialog(QDialog):
         self.ed_dns1.setText(p.get("dns1", ""))
         self.ed_dns2.setText(p.get("dns2", ""))
         self._toggle_static(self.chk_dhcp.isChecked())
+
+    def _load_adapters_async(self):
+        self._worker = AsyncWorker(get_adapters, parent=self)
+        self._worker.done.connect(self._on_adapters_loaded)
+        self._worker.failed.connect(self._on_adapters_failed)
+        self._worker.finished.connect(self._worker.deleteLater)
+        self._worker.start()
+
+    def _on_adapters_loaded(self, adapters):
+        self._worker = None
+        self._adapters = adapters or []
+        self.cb_adapter.clear()
+        self.cb_adapter.addItem("(手动输入)", None)
+        for ad in self._adapters:
+            conn = "已连接" if ad.get("status", "").lower() == "up" else ""
+            text = f"{ad['name']}  [{format_mac(ad['mac'])}]  {conn}".strip()
+            self.cb_adapter.addItem(text, ad)
+        self.cb_adapter.setEnabled(True)
+
+    def _on_adapters_failed(self, message):
+        self._worker = None
+        self.cb_adapter.clear()
+        self.cb_adapter.addItem(f"(读取网卡失败：{message}，请手动输入 MAC)", None)
+        self.cb_adapter.setEnabled(True)
 
     def _on_pick_adapter(self):
         ad = self.cb_adapter.currentData()
