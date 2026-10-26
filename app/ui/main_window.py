@@ -365,6 +365,7 @@ class MainWindow(QMainWindow):
     def _quit(self):
         self._force_quit = True
         self.close()
+        QApplication.instance().quit()
 
     def closeEvent(self, event):
         if not self._force_quit:
@@ -376,6 +377,10 @@ class MainWindow(QMainWindow):
             return
         if self._monitor:
             self._monitor.stop()
-            self._monitor.wait(3000)
+            self._monitor.requestInterruption()
+            if not self._monitor.wait(5000):
+                # thread stuck in a scan/system call; force it down
+                self._monitor.terminate()
+                self._monitor.wait(2000)
         self.tray.hide()
         event.accept()
