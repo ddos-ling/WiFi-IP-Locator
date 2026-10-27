@@ -349,6 +349,16 @@ class MainWindow(QMainWindow):
                                       f"已定位到「{point['name']}」，但配置的网卡均不在位。",
                                       QSystemTrayIcon.MessageIcon.Warning, 5000)
             return
+        # unconnected NICs are not fixable targets: skip prompting entirely
+        if not payload.get("has_connected", any(e["connected"] for e in entries)):
+            self.lb_net.setText("网络：配置网卡未连接")
+            if prompt_warranted:
+                self.tray.showMessage("网卡未连接",
+                                      f"已定位到「{point['name']}」，但该点配置的网卡均未连接，"
+                                      f"跳过网络配置检查。",
+                                      QSystemTrayIcon.MessageIcon.Information, 5000)
+            return
+        entries = [e for e in entries if e["connected"]]
         if self._mismatch_dialog is not None:
             return
         if self._suppressed_point_id == point["id"]:

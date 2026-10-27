@@ -162,6 +162,7 @@ class MonitorWorker(QThread):
                     ok = True  # one live match inside a group is enough
         self.network_state.emit({
             "point": point, "ok": ok, "entries": entries,
+            "has_connected": any(e["connected"] for e in entries),
             "transition": transition, "silent": False,
         })
 
