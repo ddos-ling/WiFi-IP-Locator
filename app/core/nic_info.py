@@ -70,12 +70,15 @@ Get-NetAdapter -ErrorAction SilentlyContinue | ForEach-Object {
           Select-Object -First 1
     $dns = ''
     if ($dnsRec) { $dns = ($dnsRec.ServerAddresses -join '|') }
+    $mcs = $_.MediaConnectState
+    $media = 'Disconnected'
+    if ("$mcs" -eq 'Connected' -or "$mcs" -eq '1') { $media = 'Connected' }
     [pscustomobject]@{
         name    = $n
         mac     = $_.MacAddress
         desc    = [string]$_.InterfaceDescription
         status  = [string]$_.Status
-        media   = [string]$_.MediaConnectState
+        media   = $media
         dhcp    = [string]$(if ($ipif) { $ipif.Dhcp } else { '' })
         ip      = $(if ($ip) { $ip.IPAddress } else { '' })
         prefix  = $(if ($ip) { $ip.PrefixLength } else { 0 })
@@ -186,6 +189,11 @@ def _parse_json_lines(out):
 _NOISE_PATTERNS = ("wan miniport", "wi-fi direct", "wifi direct",
                    "bluetooth device (personal area network)")
 
+# MediaConnectState may arrive as enum name ("Connected") or raw number
+# ("1"/"2") depending on PowerShell serialization behavior; map both
+_MEDIA_MAP = {"1": "Connected", "2": "Disconnected",
+              "connected": "Connected", "disconnected": "Disconnected"}
+
 
 def _normalize(item):
     mac = re.sub(r"[^0-9A-Fa-f]", "", item.get("mac") or "").upper()
@@ -198,12 +206,14 @@ def _normalize(item):
     dns = item.get("dns") or ""
     if isinstance(dns, str):
         dns = [d for d in dns.split("|") if d]
+    media = str(item.get("media") or "")
+    media = _MEDIA_MAP.get(media.lower(), media)
     return {
         "name": item.get("name") or "",
         "mac": mac,
         "desc": desc,
         "status": item.get("status") or "",
-        "media": item.get("media") or "",
+        "media": media,
         "dhcp": item.get("dhcp") or "",
         "ip": item.get("ip") or "",
         "prefix": int(item.get("prefix") or 0),
